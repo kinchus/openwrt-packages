@@ -1,0 +1,1969 @@
+diff -urN '--exclude=.*' s3fs-fuse/configure.ac s3fs-fuse-minimal/configure.ac
+--- s3fs-fuse/configure.ac	2023-10-01 02:09:30.010704682 +0200
++++ s3fs-fuse-minimal/configure.ac	2023-06-20 19:44:48.897218326 +0200
+@@ -34,7 +34,7 @@
+ AC_CHECK_HEADERS([sys/extattr.h])
+ AC_CHECK_FUNCS([fallocate])
+ 
+-CXXFLAGS="$CXXFLAGS -Wall -fno-exceptions -D_FILE_OFFSET_BITS=64 -D_FORTIFY_SOURCE=2"
++CXXFLAGS="$CXXFLAGS -Wall -fno-exceptions -D_FILE_OFFSET_BITS=64 -D_FORTIFY_SOURCE=3"
+ 
+ dnl ----------------------------------------------
+ dnl For macOS
+@@ -64,6 +64,54 @@
+ use_openssl_30=no
+ 
+ dnl
++dnl use mbedtls library for ssl
++dnl
++AC_MSG_CHECKING([s3fs build with MbedTls])
++AC_ARG_WITH(
++   mbedtls,
++   [AS_HELP_STRING([--with-mbedtls], [s3fs build with MbedTls(default is yes)])],
++   [
++     case "${withval}" in
++     yes)
++       AC_MSG_RESULT(yes)
++       [auth_lib=mbedtls]
++       ;;
++     *)
++       AC_MSG_RESULT(no)
++       ;;
++     esac
++   ],
++   [
++     AC_MSG_RESULT(yes)
++   ])
++
++dnl
++dnl use wolfssl library for ssl
++dnl
++AC_MSG_CHECKING([s3fs build with WolfSSL])
++AC_ARG_WITH(
++  wolfssl,
++  [AS_HELP_STRING([--with-wolfssl], [s3fs build with WolfSSL(default is no)])],
++  [
++    case "${withval}" in
++    yes)
++      AC_MSG_RESULT(yes)
++      AS_IF(
++        [test $nettle_lib = no],
++        [auth_lib=wolfssl],
++        [AC_MSG_ERROR([could not set wolfssl with nettle, nettle is only for gnutls library])])
++      ;;
++    *)
++      AC_MSG_RESULT(no)
++      ;;
++    esac
++  ],
++  [
++    AC_MSG_RESULT(no)
++  ])
++
++
++dnl
+ dnl nettle library
+ dnl
+ AC_MSG_CHECKING([s3fs build with nettle(GnuTLS)])
+@@ -84,6 +132,7 @@
+   [
+     AC_MSG_RESULT(no)
+   ])
++  
+ 
+ dnl
+ dnl use openssl library for ssl
+@@ -170,14 +219,7 @@
+     AC_MSG_RESULT(no)
+   ])
+ 
+-AS_IF(
+-  [test $auth_lib = na],
+-  AS_IF(
+-    [test $nettle_lib = no],
+-    [auth_lib=openssl],
+-    [AC_MSG_ERROR([could not set nettle without GnuTLS library])]
+-  )
+-)
++
+ 
+ dnl
+ dnl For PKG_CONFIG before checking nss/gnutls.
+@@ -187,6 +229,16 @@
+ 
+ AC_MSG_CHECKING([compile s3fs with])
+ case "${auth_lib}" in
++mbedtls)
++  AC_MSG_RESULT(MbedTLS)
++  AC_CHECK_HEADER(mbedtls/md.h, [break], [AC_MSG_ERROR([MbedTLS support explicitly requested, but includes could not be found. Try setting mbedtls_INCLUDES=/path/to/mbedtls/include])])
++  AC_CHECK_LIB([mbedcrypto],[mbedtls_md],,)
++  PKG_CHECK_MODULES([DEPS], [fuse >= ${min_fuse_version} libcurl >= 7.0 libxml-2.0 >= 2.6])
++  ;;
++wolfssl)
++  AC_MSG_RESULT(WolfSSL)
++  PKG_CHECK_MODULES([DEPS], [fuse >= ${min_fuse_version} libcurl >= 7.0 libxml-2.0 >= 2.6 wolfssl >= 5.0 ])
++  ;;
+ openssl)
+   AC_MSG_RESULT(OpenSSL)
+   PKG_CHECK_MODULES([DEPS], [fuse >= ${min_fuse_version} libcurl >= 7.0 libxml-2.0 >= 2.6 libcrypto >= 0.9 ])
+@@ -236,6 +288,8 @@
+   ;;
+ esac
+ 
++AM_CONDITIONAL([USE_SSL_MBEDTLS], [test "$auth_lib" = mbedtls])
++AM_CONDITIONAL([USE_SSL_WOLFSSL], [test "$auth_lib" = wolfssl])
+ AM_CONDITIONAL([USE_SSL_OPENSSL], [test "$auth_lib" = openssl])
+ AM_CONDITIONAL([USE_SSL_OPENSSL_30], [test "$use_openssl_30" = yes])
+ AM_CONDITIONAL([USE_SSL_GNUTLS], [test "$auth_lib" = gnutls -o "$auth_lib" = nettle])
+@@ -320,6 +374,15 @@
+   ]
+ )
+ 
++
++
++
++dnl AS_IF([test "x$enable_awsv2" != "xyes"], 
++dnl 	[awsv2_val=1],
++dnl 	[awsv2_val=0]
++dnl )
++
++
+ dnl ----------------------------------------------
+ dnl dl library
+ dnl ----------------------------------------------
+@@ -357,6 +420,112 @@
+ 
+ AC_DEFINE_UNQUOTED([COMMIT_HASH_VAL], ["${GITCOMMITHASH}"], [short commit hash value on github])
+ 
++
++dnl 
++dnl Enable/Disable s3fs local filesystem cache
++dnl
++AC_ARG_ENABLE([cache],
++    [AS_HELP_STRING([--enable-cache], [Enable s3fs local filesystem cache. This could fill up the filesystem (default=no)])],
++    [enable_cache="$enableval"],
++    [enable_cache="no"]
++)
++AC_MSG_CHECKING([S3FS local caching enabled])
++AC_MSG_RESULT([${enable_cache}])
++if test "x${enable_cache}" = "xyes"; then
++    cache_val=1
++else
++    cache_val=0
++fi
++AC_DEFINE_UNQUOTED([ENABLE_CACHE], [${cache_val}], [Enable local cache])
++
++dnl 
++dnl Enable/Disable AWS V2 Signing algorithm
++dnl
++AC_ARG_ENABLE([awsv2],
++    [AS_HELP_STRING([--enable-awsv2], [Enable AWS V2 Signature algorithm (default=no)])],
++    [enable_awsv2="$enableval"],
++    [enable_awsv2="no"]
++)
++AC_MSG_CHECKING([AWS V2 signing enabled])
++AC_MSG_RESULT([${enable_awsv2}])
++if test "x${enable_awsv2}" = "xyes"; then
++    awsv2_val=1
++else
++    awsv2_val=0
++fi
++AC_DEFINE_UNQUOTED([ENABLE_V2SIGNATURE], [${awsv2_val}], [Enable AWS V2 Signature algorithm])
++
++dnl 
++dnl
++dnl
++AC_ARG_ENABLE([logger],
++    [AS_HELP_STRING([--enable-logging], [Enable S3FS logging (default=no)])],
++    [enable_logger="$enableval"],
++    [enable_logger="no"]
++)
++AC_MSG_CHECKING([S3FS logging enabled])
++AC_MSG_RESULT([${enable_logger}])
++if test "x${enable_logger}" = "xyes"; then
++    logger_val=1
++else
++    logger_val=0
++fi
++AC_DEFINE_UNQUOTED([ENABLE_LOGGER], [${logger_val}], [Enable S3FS logging])
++
++dnl 
++dnl
++dnl
++AC_ARG_ENABLE([aws-credentials],
++    [AS_HELP_STRING([--enable-aws-credentials], [Enable AWS extra features (default=no)])],
++    [enable_awscreds="$enableval"],
++    [enable_awscreds="no"]
++)
++AC_MSG_CHECKING([AWS credentials file support])
++AC_MSG_RESULT([${enable_awscreds}])
++if test "x${enable_awscreds}" = "xyes"; then
++    awscreds_val=1
++else
++    awscreds_val=0
++fi
++AC_DEFINE_UNQUOTED([ENABLE_AWS_CREDENTIALS], [${enable_logger}], [Enable AWS credentials file])
++
++
++dnl 
++dnl
++dnl
++AC_ARG_ENABLE([extras],
++    [AS_HELP_STRING([--enable-extras], [Enable S3FS extra checks (default=no)])],
++    [enable_extras="$enableval"],
++    [enable_extras="no"]
++)
++AC_MSG_CHECKING([S3FS extras enabled])
++AC_MSG_RESULT([${enable_extras}])
++if test "x${enable_extras}" = "xyes"; then
++    extras_val=1
++else
++    extras_val=0
++fi
++AC_DEFINE_UNQUOTED([ENABLE_S3FS_EXTRAS], [${extras_val}], [Enable S3FS extra features])
++
++
++dnl 
++dnl
++dnl
++AC_ARG_ENABLE([full-help],
++    [AS_HELP_STRING([--enable-full-help], [Enable S3FS full screen help (default=no)])],
++    [enable_fullhelp="$enableval"],
++    [enable_fullhelp="no"]
++)
++AC_MSG_CHECKING([S3FS full screen help])
++AC_MSG_RESULT([${enable_awscreds}])
++if test "x${enable_extrachks}" = "xyes"; then
++    extrachks_val=1
++else
++    extrachks_val=0
++fi
++AC_DEFINE_UNQUOTED([EXTRA_CHECKS], [${extrachks_val}], [Enable S3FS extra checks])
++
++
+ dnl ----------------------------------------------
+ dnl put
+ dnl ----------------------------------------------
+diff -urN '--exclude=.*' s3fs-fuse/src/cache.cpp s3fs-fuse-minimal/src/cache.cpp
+--- s3fs-fuse/src/cache.cpp	2023-10-01 02:09:30.010704682 +0200
++++ s3fs-fuse-minimal/src/cache.cpp	2023-06-20 19:31:24.016249434 +0200
+@@ -456,6 +456,7 @@
+ 
+ bool StatCache::AddNoObjectCache(const std::string& key)
+ {
++#if ENABLE_CACHE
+     if(!IsCacheNoObject){
+         return true;    // pretend successful
+     }
+@@ -506,6 +507,7 @@
+         // if symbolic link cache has key, thus remove it.
+         DelSymlink(key.c_str(), AutoLock::ALREADY_LOCKED);
+     }
++#endif
+     return true;
+ }
+ 
+diff -urN '--exclude=.*' s3fs-fuse/src/cache.h s3fs-fuse-minimal/src/cache.h
+--- s3fs-fuse/src/cache.h	2023-10-01 02:09:30.010704682 +0200
++++ s3fs-fuse-minimal/src/cache.h	2023-06-20 19:31:13.956049896 +0200
+@@ -129,7 +129,11 @@
+         }
+         bool GetCacheNoObject() const
+         {
++#if ENABLE_CACHE
+             return IsCacheNoObject;
++#else
++            return false;
++#endif
+         }
+ 
+         // Get stat cache
+diff -urN '--exclude=.*' s3fs-fuse/src/curl.cpp s3fs-fuse-minimal/src/curl.cpp
+--- s3fs-fuse/src/curl.cpp	2023-10-01 02:09:30.010704682 +0200
++++ s3fs-fuse-minimal/src/curl.cpp	2023-06-20 16:22:12.342485634 +0200
+@@ -911,10 +911,12 @@
+                 S3FS_PRN_ERR("sse type is SSE-KMS, but there is no specified kms id.");
+                 return false;
+             }
++#if ENABLE_V2SIGNATURE
+             if(S3fsCurl::GetSignatureType() == V2_ONLY){
+                 S3FS_PRN_ERR("sse type is SSE-KMS, but signature type is not v4. SSE-KMS require signature v4.");
+                 return false;
+             }
++#endif
+             return true;
+     }
+     S3FS_PRN_ERR("sse type is unknown(%d).", static_cast<int>(S3fsCurl::ssetype));
+@@ -2747,6 +2749,7 @@
+ // @param date e.g., get_date_rfc850()
+ // @param resource e.g., "/pub"
+ //
++#if ENABLE_V2SIGNATURE
+ std::string S3fsCurl::CalcSignatureV2(const std::string& method, const std::string& strMD5, const std::string& content_type, const std::string& date, const std::string& resource, const std::string& secret_access_key, const std::string& access_token)
+ {
+     std::string Signature;
+@@ -2784,6 +2787,7 @@
+ 
+     return Signature;
+ }
++#endif
+ 
+ std::string S3fsCurl::CalcSignature(const std::string& method, const std::string& canonical_uri, const std::string& query_string, const std::string& strdate, const std::string& payload_hash, const std::string& date8601, const std::string& secret_access_key, const std::string& access_token)
+ {
+@@ -2912,6 +2916,7 @@
+     }
+ }
+ 
++#if ENABLE_V2SIGNATURE
+ void S3fsCurl::insertV2Headers(const std::string& access_key_id, const std::string& secret_access_key, const std::string& access_token)
+ {
+     std::string resource;
+@@ -2933,7 +2938,7 @@
+         requestHeaders   = curl_slist_sort_insert(requestHeaders, "Authorization", std::string("AWS " + access_key_id + ":" + Signature).c_str());
+     }
+ }
+-
++#endif
+ void S3fsCurl::insertIBMIAMHeaders(const std::string& access_key_id, const std::string& access_token)
+ {
+     requestHeaders = curl_slist_sort_insert(requestHeaders, "Authorization", ("Bearer " + access_token).c_str());
+@@ -2958,8 +2963,10 @@
+ 
+     if(S3fsCurl::ps3fscred->IsIBMIAMAuth()){
+         insertIBMIAMHeaders(access_key_id, access_token);
++#if ENABLE_V2SIGNATURE
+     }else if(S3fsCurl::signature_type == V2_ONLY){
+         insertV2Headers(access_key_id, secret_access_key, access_token);
++#endif
+     }else{
+         insertV4Headers(access_key_id, secret_access_key, access_token);
+     }
+diff -urN '--exclude=.*' s3fs-fuse/src/curl.h s3fs-fuse-minimal/src/curl.h
+--- s3fs-fuse/src/curl.h	2023-10-01 02:09:30.010704682 +0200
++++ s3fs-fuse-minimal/src/curl.h	2023-06-20 16:22:12.346485670 +0200
+@@ -31,6 +31,7 @@
+ #include "metaheader.h"
+ #include "fdcache_page.h"
+ 
++
+ //----------------------------------------------
+ // Avoid dependency on libcurl version
+ //----------------------------------------------
+@@ -250,11 +251,15 @@
+         bool RemakeHandle();
+         bool ClearInternalData();
+         void insertV4Headers(const std::string& access_key_id, const std::string& secret_access_key, const std::string& access_token);
++#if ENABLE_V2SIGNATURE
+         void insertV2Headers(const std::string& access_key_id, const std::string& secret_access_key, const std::string& access_token);
++#endif
+         void insertIBMIAMHeaders(const std::string& access_key_id, const std::string& access_token);
+         void insertAuthHeaders();
+         bool AddSseRequestHead(sse_type_t ssetype, const std::string& ssevalue, bool is_copy);
++#if ENABLE_V2SIGNATURE
+         std::string CalcSignatureV2(const std::string& method, const std::string& strMD5, const std::string& content_type, const std::string& date, const std::string& resource, const std::string& secret_access_key, const std::string& access_token);
++#endif
+         std::string CalcSignature(const std::string& method, const std::string& canonical_uri, const std::string& query_string, const std::string& strdate, const std::string& payload_hash, const std::string& date8601, const std::string& secret_access_key, const std::string& access_token);
+         int UploadMultipartPostSetup(const char* tpath, int part_num, const std::string& upload_id);
+         int CopyMultipartPostSetup(const char* from, const char* to, int part_num, const std::string& upload_id, headers_t& meta);
+diff -urN '--exclude=.*' s3fs-fuse/src/fdcache_entity.cpp s3fs-fuse-minimal/src/fdcache_entity.cpp
+--- s3fs-fuse/src/fdcache_entity.cpp	2023-10-01 02:09:30.014704738 +0200
++++ s3fs-fuse-minimal/src/fdcache_entity.cpp	2023-06-20 19:45:55.284252327 +0200
+@@ -158,6 +158,7 @@
+     pseudo_fd_map.clear();
+ 
+     if(-1 != physical_fd){
++#if ENABLE_CACHE
+         if(!cachepath.empty()){
+             // [NOTE]
+             // Compare the inode of the existing cache file with the inode of
+@@ -172,6 +173,7 @@
+                 }
+             }
+         }
++#endif
+         if(pfile){
+             fclose(pfile);
+             pfile = NULL;
+@@ -198,6 +200,7 @@
+ //
+ ino_t FdEntity::GetInode() const
+ {
++#if ENABLE_CACHE
+     if(cachepath.empty()){
+         S3FS_PRN_INFO("cache file path is empty, then return inode as 0.");
+         return 0;
+@@ -209,6 +212,10 @@
+         return 0;
+     }
+     return st.st_ino;
++#else
++    return 0;
++#endif
++
+ }
+ 
+ void FdEntity::Close(int fd)
+@@ -230,6 +237,7 @@
+     // check pseudo fd count
+     if(-1 != physical_fd && 0 == GetOpenCount(AutoLock::ALREADY_LOCKED)){
+         AutoLock auto_data_lock(&fdent_data_lock);
++#if ENABLE_CACHE
+         if(!cachepath.empty()){
+             // [NOTE]
+             // Compare the inode of the existing cache file with the inode of
+@@ -244,6 +252,7 @@
+                 }
+             }
+         }
++#endif
+         if(pfile){
+             fclose(pfile);
+             pfile = NULL;
+@@ -310,6 +319,7 @@
+ //
+ int FdEntity::OpenMirrorFile()
+ {
++#if ENABLE_CACHE
+     if(cachepath.empty()){
+         S3FS_PRN_ERR("cache path is empty, why come here");
+         return -EIO;
+@@ -360,6 +370,10 @@
+         return -errno;
+     }
+     return mirrorfd;
++
++#else
++    return -EIO;
++#endif
+ }
+ 
+ bool FdEntity::FindPseudoFd(int fd, AutoLock::Type locktype) const
+@@ -485,6 +499,9 @@
+         bool  need_save_csf = false;  // need to save(reset) cache stat file
+         bool  is_truncate   = false;  // need to truncate
+ 
++        CacheFileStat* pcfstat = NULL;
++
++#if ENABLE_CACHE
+         if(!cachepath.empty()){
+             // using cache
+             struct stat st;
+@@ -498,12 +515,12 @@
+             }
+ 
+             // open cache and cache stat file, load page info.
+-            CacheFileStat cfstat(path.c_str());
++            pcfstat = new CacheFileStat(path.c_str());
+ 
+             // try to open cache file
+             if( -1 != (physical_fd = open(cachepath.c_str(), O_RDWR)) &&
+                 0 != (inode = FdEntity::GetInode(physical_fd))        &&
+-                pagelist.Serialize(cfstat, false, inode)          )
++                pagelist.Serialize(*pcfstat, false, inode)            )
+             {
+                 // succeed to open cache file and to load stats data
+                 memset(&st, 0, sizeof(struct stat));
+@@ -517,13 +534,18 @@
+                 if(-1 == size){
+                     if(st.st_size != pagelist.Size()){
+                         pagelist.Resize(st.st_size, false, true); // Areas with increased size are modified
+-                        need_save_csf = true;     // need to update page info
++                        need_save_csf = true;                     // need to update page info
+                     }
+                     size = st.st_size;
+                 }else{
++                    // First if the current cache file size and pagelist do not match, fix pagelist.
++                    if(st.st_size != pagelist.Size()){
++                        pagelist.Resize(st.st_size, false, true); // Areas with increased size are modified
++                        need_save_csf = true;                     // need to update page info
++                    }
+                     if(size != pagelist.Size()){
+                         pagelist.Resize(size, false, true);       // Areas with increased size are modified
+-                        need_save_csf = true;     // need to update page info
++                        need_save_csf = true;                     // need to update page info
+                     }
+                     if(size != st.st_size){
+                         is_truncate = true;
+@@ -588,6 +610,7 @@
+             }
+ 
+         }else{
++#endif
+             // not using cache
+             inode = 0;
+ 
+@@ -616,8 +639,10 @@
+ 
+                 is_truncate = true;
+             }
+-        }
+ 
++#if ENABLE_CACHE
++        }
++#endif
+         // truncate cache(tmp) file
+         if(is_truncate){
+             if(0 != ftruncate(physical_fd, size) || 0 != fsync(physical_fd)){
+@@ -631,12 +656,14 @@
+         }
+ 
+         // reset cache stat file
+-        if(need_save_csf){
+-            CacheFileStat cfstat(path.c_str());
+-            if(!pagelist.Serialize(cfstat, true, inode)){
++        if(need_save_csf && pcfstat){
++            if(!pagelist.Serialize(*pcfstat, true, inode)){
+                 S3FS_PRN_WARN("failed to save cache stat file(%s), but continue...", path.c_str());
+             }
+         }
++        if(pcfstat){
++            delete pcfstat;
++        }
+ 
+         // set original headers and size in it.
+         if(pmeta){
+@@ -954,6 +981,7 @@
+             S3FS_PRN_ERR("futimens failed. errno(%d)", errno);
+             return false;
+         }
++#if ENABLE_CACHE
+     }else if(!cachepath.empty()){
+         // not opened file yet.
+         struct timespec ts[2];
+@@ -969,6 +997,7 @@
+             S3FS_PRN_ERR("utimensat failed. errno(%d)", errno);
+             return false;
+         }
++#endif
+     }
+     holding_mtime.tv_sec = -1;
+     holding_mtime.tv_nsec = 0;
+@@ -1139,6 +1168,8 @@
+         return -EBADF;
+     }
+ 
++
++#if ENABLE_CACHE
+     // [NOTE]
+     // This method calling means that the cache file is never used no more.
+     //
+@@ -1149,7 +1180,7 @@
+         cachepath.erase();
+         mirrorpath.erase();
+     }
+-
++#endif
+     // Change entity key in manager mapping
+     FdManager::get()->ChangeEntityToTempPath(this, path.c_str());
+ 
+@@ -1431,10 +1462,11 @@
+         pagelist.Dump();
+     }
+ 
+-    int result;
++    int result = 0;
+     if(nomultipart){
+         // No multipart upload
+         result = RowFlushNoMultipart(pseudo_obj, tpath);
++#if ENABLE_S3FS_EXTRAS
+     }else if(FdEntity::streamupload){
+         // Stream multipart upload
+         result = RowFlushStreamMultipart(pseudo_obj, tpath);
+@@ -1444,6 +1476,7 @@
+     }else{
+         // Normal multipart upload
+         result = RowFlushMultipart(pseudo_obj, tpath);
++#endif
+     }
+ 
+     // [NOTE]
+@@ -1522,6 +1555,7 @@
+     return result;
+ }
+ 
++#if ENABLE_S3FS_EXTRAS
+ // [NOTE]
+ // Both fdent_lock and fdent_data_lock must be locked before calling.
+ //
+@@ -1937,6 +1971,8 @@
+     return result;
+ }
+ 
++#endif
++
+ // [NOTICE]
+ // Need to lock before calling this method.
+ bool FdEntity::ReserveDiskSpace(off_t size)
+diff -urN '--exclude=.*' s3fs-fuse/src/Makefile.am s3fs-fuse-minimal/src/Makefile.am
+--- s3fs-fuse/src/Makefile.am	2023-10-01 02:09:30.010704682 +0200
++++ s3fs-fuse-minimal/src/Makefile.am	2023-06-20 02:08:21.934408282 +0200
+@@ -59,6 +59,12 @@
+     autolock.cpp \
+     threadpoolman.cpp \
+     common_auth.cpp
++if USE_SSL_MBEDTLS
++    s3fs_SOURCES += mbedtls_auth.cpp
++endif
++if USE_SSL_WOLFSSL
++    s3fs_SOURCES += wolfssl_auth.cpp
++endif
+ if USE_SSL_OPENSSL
+     s3fs_SOURCES += openssl_auth.cpp
+ endif
+@@ -77,6 +83,12 @@
+     test_string_util
+ 
+ test_curl_util_SOURCES = common_auth.cpp curl_util.cpp string_util.cpp test_curl_util.cpp s3fs_global.cpp s3fs_logger.cpp
++if USE_SSL_MBEDTLS
++    test_curl_util_SOURCES += mbedtls_auth.cpp
++endif
++if USE_SSL_WOLFSSL
++    test_curl_util_SOURCES += wolfssl_auth.cpp
++endif
+ if USE_SSL_OPENSSL
+     test_curl_util_SOURCES += openssl_auth.cpp
+ endif
+diff -urN '--exclude=.*' s3fs-fuse/src/mbedtls_auth.cpp s3fs-fuse-minimal/src/mbedtls_auth.cpp
+--- s3fs-fuse/src/mbedtls_auth.cpp	1970-01-01 01:00:00.000000000 +0100
++++ s3fs-fuse-minimal/src/mbedtls_auth.cpp	2023-06-20 16:22:12.410486257 +0200
+@@ -0,0 +1,420 @@
++/*
++ * s3fs - FUSE-based file system backed by Amazon S3
++ *
++ * Copyright(C) 2007 Randy Rizun <rrizun@gmail.com>
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; either version 2
++ * of the License, or (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
++ */
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <errno.h>
++#include <pthread.h>
++#include <unistd.h>
++#include <syslog.h>
++#include <sys/types.h>
++#include <sys/stat.h>
++#include <string.h>
++#include "mbedtls/md.h"     /* generic interface */
++#include "mbedtls/md5.h"
++#include "mbedtls/sha256.h" /* SHA-256 only */
++#include "mbedtls/threading.h" /* SHA-256 only */
++#include <string>
++#include <map>
++
++#include "common.h"
++#include "s3fs.h"
++#include "s3fs_auth.h"
++#include "s3fs_logger.h"
++
++//-------------------------------------------------------------------
++// Utility Function for version
++//-------------------------------------------------------------------
++
++const char* s3fs_crypt_lib_name()
++{
++    static const char version[] = "MbedTLS";
++
++    return version;
++}
++
++
++//-------------------------------------------------------------------
++// Utility Function for global init
++//-------------------------------------------------------------------
++bool s3fs_init_global_ssl()
++{
++    return true;
++}
++
++bool s3fs_destroy_global_ssl()
++{
++    return true;
++}
++
++//-------------------------------------------------------------------
++// Utility Function for crypt lock
++//-------------------------------------------------------------------
++
++#ifdef MBEDTLS_PTHREAD
++
++#define CRYPTO_num_locks()            (1)
++#define CRYPTO_set_locking_callback(func)
++#define CRYPTO_get_locking_callback()         (NULL)
++#define CRYPTO_set_add_lock_callback(func)
++#define CRYPTO_get_add_lock_callback()        (NULL)
++#define CRYPTO_set_id_callback(func)
++#define CRYPTO_get_id_callback()                     (NULL)
++#define CRYPTO_thread_id()                           (0UL)
++#define CRYPTO_set_dynlock_create_callback(dyn_create_function)
++#define CRYPTO_set_dynlock_lock_callback(dyn_lock_function)
++#define CRYPTO_set_dynlock_destroy_callback(dyn_destroy_function)
++#define CRYPTO_get_dynlock_create_callback()          (NULL)
++#define CRYPTO_get_dynlock_lock_callback()            (NULL)
++#define CRYPTO_get_dynlock_destroy_callback()         (NULL)
++# define CRYPTO_cleanup_all_ex_data() while(0) continue
++
++static mbedtls_threading_mutex_t* s3fs_crypt_mutex = NULL;
++
++static void s3fs_crypt_mutex_lock(int mode, int pos, const char* file, int line) __attribute__ ((unused));
++static void s3fs_crypt_mutex_lock(int mode, int pos, const char* file, int line)
++{
++	S3FS_PRN_DBG("s3fs_crypt_mutex_lock start");
++
++	if(s3fs_crypt_mutex){
++        int result;
++        if(mode){
++            if(0 != (result = mbedtls_mutex_lock(&s3fs_crypt_mutex[pos]))){
++                S3FS_PRN_CRIT("pthread_mutex_lock returned: %d", result);
++                abort();
++            }
++        }else{
++            if(0 != (result = mbedtls_mutex_unlock(&s3fs_crypt_mutex[pos]))){
++                S3FS_PRN_CRIT("pthread_mutex_unlock returned: %d", result);
++                abort();
++            }
++        }
++    }
++}
++
++static unsigned long s3fs_crypt_get_threadid() __attribute__ ((unused));
++static unsigned long s3fs_crypt_get_threadid()
++{
++    // For FreeBSD etc, some system's pthread_t is structure pointer.
++    // Then we use cast like C style(not C++) instead of ifdef.
++    return (unsigned long)(pthread_self());
++}
++
++static struct mbedtls_threading_mutex_t* s3fs_dyn_crypt_mutex(const char* file, int line) __attribute__ ((unused));
++static struct mbedtls_threading_mutex_t* s3fs_dyn_crypt_mutex(const char* file, int line)
++{
++	S3FS_PRN_DBG("s3fs_dyn_crypt_mutex");
++	mbedtls_threading_mutex_t  *dyndata = new mbedtls_threading_mutex_t();
++	mbedtls_mutex_init(dyndata);
++    return dyndata;
++}
++
++static void s3fs_dyn_crypt_mutex_lock(int mode, mbedtls_threading_mutex_t* dyndata, const char* file, int line) __attribute__ ((unused));
++static void s3fs_dyn_crypt_mutex_lock(int mode, mbedtls_threading_mutex_t* dyndata, const char* file, int line)
++{
++	S3FS_PRN_DBG("s3fs_dyn_crypt_mutex_lock");
++
++    if(dyndata){
++        int result;
++        if(mode){
++            if(0 != (result = mbedtls_mutex_lock(dyndata))){
++                S3FS_PRN_CRIT("pthread_mutex_lock returned: %d", result);
++                abort();
++            }
++        }else{
++            if(0 != (result = mbedtls_mutex_unlock(dyndata))){
++                S3FS_PRN_CRIT("pthread_mutex_unlock returned: %d", result);
++                abort();
++            }
++        }
++    }
++}
++
++static void s3fs_destroy_dyn_crypt_mutex(mbedtls_threading_mutex_t* dyndata, const char* file, int line) __attribute__ ((unused));
++static void s3fs_destroy_dyn_crypt_mutex(mbedtls_threading_mutex_t* dyndata, const char* file, int line)
++{
++    if(dyndata){
++      mbedtls_mutex_free(dyndata);
++      delete dyndata;
++    }
++}
++
++bool s3fs_init_crypt_mutex()
++{
++	S3FS_PRN_DBG("Initializing crypt mutex");
++
++    if(s3fs_crypt_mutex){
++        S3FS_PRN_DBG("s3fs_crypt_mutex is not NULL, destroy it.");
++        if(!s3fs_destroy_crypt_mutex()){
++            S3FS_PRN_ERR("Failed to s3fs_crypt_mutex");
++            return false;
++        }
++    }
++
++    s3fs_crypt_mutex = new mbedtls_threading_mutex_t[CRYPTO_num_locks()];
++    for(int cnt = 0; cnt < CRYPTO_num_locks(); cnt++){
++        mbedtls_mutex_init(&s3fs_crypt_mutex[cnt]);
++    }
++    // static lock
++    CRYPTO_set_locking_callback(s3fs_crypt_mutex_lock);
++    CRYPTO_set_id_callback(s3fs_crypt_get_threadid);
++    // dynamic lock
++    CRYPTO_set_dynlock_create_callback(s3fs_dyn_crypt_mutex);
++    CRYPTO_set_dynlock_lock_callback(s3fs_dyn_crypt_mutex_lock);
++    CRYPTO_set_dynlock_destroy_callback(s3fs_destroy_dyn_crypt_mutex);
++
++    return true;
++}
++
++bool s3fs_destroy_crypt_mutex()
++{
++    if(!s3fs_crypt_mutex){
++        return true;
++    }
++
++    CRYPTO_set_dynlock_destroy_callback(NULL);
++    CRYPTO_set_dynlock_lock_callback(NULL);
++    CRYPTO_set_dynlock_create_callback(NULL);
++    CRYPTO_set_id_callback(NULL);
++    CRYPTO_set_locking_callback(NULL);
++
++    for(int cnt = 0; cnt < CRYPTO_num_locks(); cnt++){
++        mbedtls_mutex_free(&s3fs_crypt_mutex[cnt]);
++    }
++    CRYPTO_cleanup_all_ex_data();
++    delete[] s3fs_crypt_mutex;
++    s3fs_crypt_mutex = NULL;
++
++    return true;
++}
++
++#else
++
++
++
++
++bool s3fs_init_crypt_mutex()
++{
++	S3FS_PRN_DBG("s3fs_init_crypt_mutex start");
++    return true;
++}
++
++bool s3fs_destroy_crypt_mutex()
++{
++    return true;
++}
++
++#endif
++
++
++//-------------------------------------------------------------------
++// Utility Function for HMAC
++//-------------------------------------------------------------------
++#if ENABLE_V2SIGNATURE
++bool s3fs_HMAC(const void* key, size_t keylen, const unsigned char* data, size_t datalen, unsigned char** digest, unsigned int* digestlen)
++{
++	if(!key || !data || !digest || !digestlen){
++        return false;
++    }
++
++	*digestlen = get_sha256_digest_length();
++	*digest = new unsigned char[*digestlen + 1];
++	mbedtls_md_context_t ctx;
++	mbedtls_md_type_t alg = MBEDTLS_MD_SHA256;
++    mbedtls_md_init(&ctx);
++    const mbedtls_md_info_t *info = mbedtls_md_info_from_type(alg);
++    mbedtls_md_setup(&ctx, info, 1);
++    mbedtls_md_hmac_starts(&ctx, (unsigned char *)key, keylen);
++    mbedtls_md_hmac_update(&ctx, data, datalen);
++    mbedtls_md_hmac_finish(&ctx, *digest);
++    mbedtls_md_free(&ctx);
++
++    return true;
++    // return s3fs_HMAC_generic(mbedtls_md_info_from_type(MBEDTLS_MD_SHA1), key, keylen, data, datalen, digest, digestlen);
++}
++#endif
++
++bool s3fs_HMAC256(const void* key, size_t keylen, const unsigned char* data, size_t datalen, unsigned char** digest, unsigned int* digestlen)
++{
++    if(!key || !data || !digest || !digestlen){
++        return false;
++    }
++
++    *digestlen = get_sha256_digest_length();
++    *digest = new unsigned char[*digestlen + 1];
++    mbedtls_md_type_t md_type = MBEDTLS_MD_SHA256;
++
++    int ret = mbedtls_md_hmac(mbedtls_md_info_from_type(md_type),
++    		(unsigned char*)key, keylen,
++			data, datalen,
++			*digest);
++
++    return (ret == 0);
++}
++
++
++//bool s3fs_HMAC_generic(const mbedtls_md_info_t *info, const void* key, unsigned long keylen, const unsigned char* data, size_t datalen, unsigned char** digest, unsigned int* digestlen)
++//{
++//    if(!key || !data || !digest || !digestlen){
++//        return false;
++//    }
++//
++//    *digestlen = MBEDTLS_MD_MAX_SIZE;
++//    *digest = new unsigned char[MBEDTLS_MD_MAX_SIZE];
++//    mbedtls_md_context_t ctx;
++//    mbedtls_md_init(&ctx);
++//    mbedtls_md_setup(&ctx, info, 1);
++//    mbedtls_md_hmac_starts(&ctx, (unsigned char *)key,keylen);
++//    mbedtls_md_hmac_update(&ctx, data, datalen);
++//    mbedtls_md_hmac_finish(&ctx, *digest);
++//    mbedtls_md_free(&ctx);
++//    return true;
++//}
++
++
++//-------------------------------------------------------------------
++// Utility Function for MD5
++//-------------------------------------------------------------------
++size_t get_md5_digest_length()
++{
++    return MBEDTLS_MD_MAX_SIZE;
++}
++
++
++unsigned char* s3fs_md5_fd(int fd, off_t start, off_t size)
++{
++	mbedtls_md5_context ctx;
++	off_t bytes;
++    unsigned char* result;
++    off_t len = 512;
++    unsigned char buf[len];
++
++    if(-1 == size){
++        struct stat st;
++        if(-1 == fstat(fd, &st)){
++            return NULL;
++        }
++        size = st.st_size;
++    }
++
++    mbedtls_md5_init(&ctx);
++  	mbedtls_md5_starts(&ctx);
++
++    for(off_t total = 0; total < size; total += bytes){
++
++
++        bytes = len < (size - total) ? len : (size - total);
++        bytes = pread(fd, buf, bytes, start + total);
++        if(0 == bytes){
++            // end of file
++            break;
++        }else if(-1 == bytes){
++            // error
++            S3FS_PRN_ERR("file read error(%d)", errno);
++            mbedtls_md5_free(&ctx);
++            return NULL;
++        }
++        mbedtls_md5_update(&ctx, buf, bytes);
++    }
++    mbedtls_md5_finish(&ctx, buf);
++    result = new unsigned char[get_md5_digest_length()];
++    memcpy(result, buf, get_md5_digest_length());
++    mbedtls_md5_free(&ctx);
++    return result;
++}
++
++
++//-------------------------------------------------------------------
++// Utility Function for SHA256
++//-------------------------------------------------------------------
++size_t get_sha256_digest_length()
++{
++    return 32;
++}
++
++
++bool s3fs_sha256(const unsigned char* data, size_t datalen, unsigned char** digest, unsigned int* digestlen)
++{
++	// S3FS_PRN_DBG("Started");
++	// S3FS_PRN_DBG("DATA(%d) = %s", datalen, data);
++	size_t len = (*digestlen) = static_cast<unsigned int>(get_sha256_digest_length());
++    *digest = new unsigned char[len];
++    mbedtls_sha256(data, datalen, *digest, 0);
++
++//    char outstr[256];
++//    printHex(*digest, len, outstr);
++//    S3FS_PRN_DBG("HASH(%d) = %s", *digestlen, outstr);
++    return true;
++}
++
++
++unsigned char* s3fs_sha256_fd(int fd, off_t start, off_t size)
++{
++	off_t bytes;
++    unsigned char* result;
++    off_t buff_len = 512;
++    unsigned char buf[buff_len];
++
++    if(-1 == size){
++        struct stat st;
++        if(-1 == fstat(fd, &st)){
++            return NULL;
++        }
++        size = st.st_size;
++    }
++
++    mbedtls_sha256_context ctx2;
++    mbedtls_sha256_init(&ctx2);
++    mbedtls_sha256_starts(&ctx2, 0); /* SHA-256, not 224 */
++
++    for(off_t total = 0; total < size; total += bytes){
++        bytes = buff_len < (size - total) ? buff_len : (size - total);
++        bytes = pread(fd, buf, bytes, start + total);
++        if(0 == bytes){
++            // end of file
++            break;
++        }
++        else if(-1 == bytes){
++            // error
++            S3FS_PRN_ERR("file read error(%d)", errno);
++            mbedtls_sha256_free(&ctx2);
++            return NULL;
++        }
++        mbedtls_sha256_update(&ctx2, buf, bytes);
++    }
++
++    mbedtls_sha256_finish(&ctx2, buf);
++    result = new unsigned char[get_sha256_digest_length()];
++    memcpy(result, buf, get_sha256_digest_length());
++    mbedtls_sha256_free(&ctx2);
++
++    return result;
++}
++
++
++
++/*
++* Local variables:
++* tab-width: 4
++* c-basic-offset: 4
++* End:
++* vim600: expandtab sw=4 ts=4 fdm=marker
++* vim<600: expandtab sw=4 ts=4
++*/
+diff -urN '--exclude=.*' s3fs-fuse/src/s3fs.cpp s3fs-fuse-minimal/src/s3fs.cpp
+--- s3fs-fuse/src/s3fs.cpp	2023-10-01 02:09:30.014704738 +0200
++++ s3fs-fuse-minimal/src/s3fs.cpp	2023-06-20 16:20:15.761436740 +0200
+@@ -86,7 +86,9 @@
+ static bool is_s3fs_uid           = false;// default does not set.
+ static bool is_s3fs_gid           = false;// default does not set.
+ static bool is_s3fs_umask         = false;// default does not set.
+-static bool is_remove_cache       = false;
++#if ENABLE_CACHE
++	static bool is_remove_cache       = false;
++#endif
+ static bool is_use_xattr          = false;
+ static off_t multipart_threshold  = 25 * 1024 * 1024;
+ static int64_t singlepart_copy_limit = 512 * 1024 * 1024;
+@@ -4209,10 +4211,12 @@
+ {
+     S3FS_PRN_INIT_INFO("init v%s(commit:%s) with %s, credential-library(%s)", VERSION, COMMIT_HASH_VAL, s3fs_crypt_lib_name(), ps3fscred->GetCredFuncVersion(false));
+ 
++#if ENABLE_CACHE
+     // cache(remove cache dirs at first)
+     if(is_remove_cache && (!CacheFileStat::DeleteCacheFileStatDirectory() || !FdManager::DeleteCacheDirectory())){
+         S3FS_PRN_DBG("Could not initialize cache directory.");
+     }
++#endif
+ 
+     // check loading IAM role name
+     if(!ps3fscred->LoadIAMRoleFromMetaData()){
+@@ -4258,10 +4262,12 @@
+         S3FS_PRN_WARN("Failed to clean up signal object.");
+     }
+ 
++#if ENABLE_CACHE
+     // cache(remove at last)
+     if(is_remove_cache && (!CacheFileStat::DeleteCacheFileStatDirectory() || !FdManager::DeleteCacheDirectory())){
+         S3FS_PRN_WARN("Could not remove cache directory.");
+     }
++#endif
+ }
+ 
+ static int s3fs_access(const char* path, int mask)
+@@ -4596,7 +4602,7 @@
+ 
+ // This is repeatedly called by the fuse option parser
+ // if the key is equal to FUSE_OPT_KEY_OPT, it's an option passed in prefixed by 
+-// '-' or '--' e.g.: -f -d -ousecache=/tmp
++// '-' or '--' e.g.: -f -d -oNO_CACHE=/tmp
+ //
+ // if the key is equal to FUSE_OPT_KEY_NONOPT, it's either the bucket name 
+ //  or the mountpoint. The bucket name will always come before the mountpoint
+@@ -4733,7 +4739,8 @@
+             FdManager::SetTmpDir(strchr(arg, '=') + sizeof(char));
+             return 0;
+         }
+-        if(is_prefix(arg, "use_cache=")){
++#if ENABLE_CACHE
++        if(is_prefix(arg, "NO_CACHE=")){
+             FdManager::SetCacheDir(strchr(arg, '=') + sizeof(char));
+             return 0;
+         }
+@@ -4745,6 +4752,7 @@
+             is_remove_cache = true;
+             return 0;
+         }
++#endif
+         if(is_prefix(arg, "multireq_max=")){
+             int maxreq = static_cast<int>(cvt_strtoofft(strchr(arg, '=') + sizeof(char), /*base=*/ 10));
+             S3fsCurl::SetMaxMultiRequest(maxreq);
+@@ -5147,10 +5155,6 @@
+             }
+             return 0;
+         }
+-        if(0 == strcmp(arg, "sigv2")){
+-            S3fsCurl::SetSignatureType(V2_ONLY);
+-            return 0;
+-        }
+         if(0 == strcmp(arg, "sigv4")){
+             S3fsCurl::SetSignatureType(V4_ONLY);
+             return 0;
+diff -urN '--exclude=.*' s3fs-fuse/src/s3fs_cred.cpp s3fs-fuse-minimal/src/s3fs_cred.cpp
+--- s3fs-fuse/src/s3fs_cred.cpp	2023-10-01 02:09:30.014704738 +0200
++++ s3fs-fuse-minimal/src/s3fs_cred.cpp	2023-06-20 16:27:18.565401651 +0200
+@@ -57,8 +57,6 @@
+ 		"s3fs-fuse built-in Credential I/F Function\n"
+ 		"Copyright(C) 2007 s3fs-fuse\n";
+ 
+-    S3FS_PRN_CRIT("Check why built-in function was called, the external credential library must have VersionS3fsCredential function.");
+-
+     if(detail){
+         return detail_version;
+     }else{
+@@ -598,6 +596,7 @@
+ //
+ bool S3fsCred::IsReadableS3fsPasswdFile() const
+ {
++#if ENABLE_S3FS_EXTRAS
+     if(passwd_file.empty()){
+         return false;
+     }
+@@ -607,7 +606,7 @@
+         return false;
+     }
+     PF.close();
+-
++#endif
+     return true;
+ }
+ 
+@@ -624,6 +623,7 @@
+ //
+ bool S3fsCred::CheckS3fsPasswdFilePerms()
+ {
++#if ENABLE_S3FS_EXTRAS
+     struct stat info;
+ 
+     // let's get the file info
+@@ -666,6 +666,7 @@
+         S3FS_PRN_EXIT("credentials file %s should not have executable permissions.", passwd_file.c_str());
+         return false;
+     }
++#endif
+     return true;
+ }
+ 
+@@ -860,6 +861,7 @@
+ //
+ int S3fsCred::CheckS3fsCredentialAwsFormat(const kvmap_t& kvmap, std::string& access_key_id, std::string& secret_access_key)
+ {
++#if ENABLE_AWS_CREDENTIALS
+     std::string str1(S3fsCred::AWS_ACCESSKEYID);
+     std::string str2(S3fsCred::AWS_SECRETKEY);
+ 
+@@ -877,7 +879,7 @@
+     }
+     access_key_id     = str1_it->second;
+     secret_access_key = str2_it->second;
+-
++#endif
+     return 1;
+ }
+ 
+@@ -886,6 +888,7 @@
+ //
+ bool S3fsCred::ReadAwsCredentialFile(const std::string &filename, AutoLock::Type type)
+ {
++#if ENABLE_AWS_CREDENTIALS
+     // open passwd file
+     std::ifstream PF(filename.c_str());
+     if(!PF.good()){
+@@ -951,6 +954,7 @@
+             return false;
+         }
+     }
++#endif
+     return true;
+ }
+ 
+@@ -1028,6 +1032,7 @@
+         return true;
+     }
+ 
++#if ENABLE_AWS_CREDENTIALS
+     // 3a - from the AWS_CREDENTIAL_FILE environment variable
+     char* AWS_CREDENTIAL_FILE = getenv("AWS_CREDENTIAL_FILE");
+     if(AWS_CREDENTIAL_FILE != NULL){
+@@ -1052,6 +1057,7 @@
+         S3FS_PRN_EXIT("Could not find profile: %s in file: %s", aws_profile.c_str(), aws_credentials.c_str());
+         return false;
+     }
++#endif
+ 
+     // 4 - from the default location in the users home directory
+     char* HOME = getenv("HOME");
+diff -urN '--exclude=.*' s3fs-fuse/src/s3fs_global.cpp s3fs-fuse-minimal/src/s3fs_global.cpp
+--- s3fs-fuse/src/s3fs_global.cpp	2023-10-01 02:09:30.014704738 +0200
++++ s3fs-fuse-minimal/src/s3fs_global.cpp	2023-06-20 19:40:42.863909446 +0200
+@@ -24,7 +24,11 @@
+ // Global variables
+ //-------------------------------------------------------------------
+ bool foreground                   = false;
++#if ENABLE_S3FS_EXTRAS
+ bool nomultipart                  = false;
++#else
++bool nomultipart                  = true;
++#endif
+ bool pathrequeststyle             = false;
+ bool complement_stat              = false;
+ bool noxmlns                      = false;
+diff -urN '--exclude=.*' s3fs-fuse/src/s3fs_help.cpp s3fs-fuse-minimal/src/s3fs_help.cpp
+--- s3fs-fuse/src/s3fs_help.cpp	2023-10-01 02:09:30.014704738 +0200
++++ s3fs-fuse-minimal/src/s3fs_help.cpp	2023-06-20 19:35:20.147100509 +0200
+@@ -60,40 +60,53 @@
+     "        must specify this option after -o option for bucket name.\n"
+     "\n"
+     "   default_acl (default=\"private\")\n"
++#if ENABLE_S3FS_EXTRAS
+     "      - the default canned acl to apply to all written s3 objects,\n"
+     "        e.g., private, public-read. see\n"
+     "        https://docs.aws.amazon.com/AmazonS3/latest/dev/acl-overview.html#canned-acl\n"
+     "        for the full list of canned ACLs\n"
+     "\n"
++#endif
+     "   retries (default=\"5\")\n"
++#if ENABLE_S3FS_EXTRAS
+     "      - number of times to retry a failed S3 transaction\n"
+     "\n"
++#endif
+     "   tmpdir (default=\"/tmp\")\n"
++#if ENABLE_S3FS_EXTRAS
+     "      - local folder for temporary files.\n"
+     "\n"
++#endif
++#if ENABLE_CACHE
+     "   use_cache (default=\"\" which means disabled)\n"
+     "      - local folder to use for local file cache\n"
+     "\n"
+     "   check_cache_dir_exist (default is disable)\n"
+-    "      - if use_cache is set, check if the cache directory exists.\n"
++    "      - if ENABLE_CACHE is set, check if the cache directory exists.\n"
+     "        If this option is not specified, it will be created at runtime\n"
+     "        when the cache directory does not exist.\n"
+     "\n"
+     "   del_cache (delete local file cache)\n"
+     "      - delete local file cache when s3fs starts and exits.\n"
+     "\n"
++#endif
+     "   storage_class (default=\"standard\")\n"
++#if ENABLE_S3FS_EXTRAS
+     "      - store object with specified storage class. Possible values:\n"
+     "        standard, standard_ia, onezone_ia, reduced_redundancy,\n"
+     "        intelligent_tiering, glacier, glacier_ir, and deep_archive.\n"
+     "\n"
++#endif
+     "   use_rrs (default is disable)\n"
++#if ENABLE_S3FS_EXTRAS
+     "      - use Amazon's Reduced Redundancy Storage.\n"
+     "        this option can not be specified with use_sse.\n"
+     "        (can specify use_rrs=1 for old version)\n"
+     "        this option has been replaced by new storage_class option.\n"
+     "\n"
++#endif
+     "   use_sse (default is disable)\n"
++#if ENABLE_S3FS_EXTRAS
+     "      - Specify three type Amazon's Server-Site Encryption: SSE-S3,\n"
+     "        SSE-C or SSE-KMS. SSE-S3 uses Amazon S3-managed encryption\n"
+     "        keys, SSE-C uses customer-provided encryption keys, and\n"
+@@ -129,7 +142,9 @@
+     "        about that you can not use the KMS id which is not same EC2\n"
+     "        region.\n"
+     "\n"
++#endif
+     "   load_sse_c - specify SSE-C keys\n"
++#if ENABLE_S3FS_EXTRAS
+     "        Specify the custom-provided encryption keys file path for decrypting\n"
+     "        at downloading.\n"
+     "        If you use the custom-provided encryption key at uploading, you\n"
+@@ -138,17 +153,23 @@
+     "        that is SSE-C key history. AWSSSECKEYS environment is as same as this\n"
+     "        file contents.\n"
+     "\n"
++#endif
+     "   public_bucket (default=\"\" which means disabled)\n"
++#if ENABLE_S3FS_EXTRAS
+     "      - anonymously mount a public bucket when set to 1, ignores the \n"
+     "        $HOME/.passwd-s3fs and /etc/passwd-s3fs files.\n"
+     "        S3 does not allow copy object api for anonymous users, then\n"
+     "        s3fs sets nocopyapi option automatically when public_bucket=1\n"
+     "        option is specified.\n"
+     "\n"
++#endif
+     "   passwd_file (default=\"\")\n"
++#if ENABLE_S3FS_EXTRAS
+     "      - specify which s3fs password file to use\n"
+     "\n"
++#endif
+     "   ahbe_conf (default=\"\" which means disabled)\n"
++#if ENABLE_S3FS_EXTRAS
+     "      - This option specifies the configuration file path which\n"
+     "      file is the additional HTTP header by file (object) extension.\n"
+     "      The configuration file format is below:\n"
+@@ -171,61 +192,90 @@
+     "      If you specify this option for set \"Content-Encoding\" HTTP \n"
+     "      header, please take care for RFC 2616.\n"
+     "\n"
++#endif
+     "   profile (default=\"default\")\n"
++#if ENABLE_S3FS_EXTRAS
+     "      - Choose a profile from ${HOME}/.aws/credentials to authenticate\n"
+     "        against S3. Note that this format matches the AWS CLI format and\n"
+     "        differs from the s3fs passwd format.\n"
+     "\n"
++#endif
+     "   connect_timeout (default=\"300\" seconds)\n"
++#if ENABLE_S3FS_EXTRAS
+     "      - time to wait for connection before giving up\n"
+     "\n"
++#endif
+     "   readwrite_timeout (default=\"120\" seconds)\n"
++#if ENABLE_S3FS_EXTRAS
+     "      - time to wait between read/write activity before giving up\n"
+     "\n"
++#endif
+     "   list_object_max_keys (default=\"1000\")\n"
++#if ENABLE_S3FS_EXTRAS
+     "      - specify the maximum number of keys returned by S3 list object\n"
+     "        API. The default is 1000. you can set this value to 1000 or more.\n"
+     "\n"
++#endif
+     "   max_stat_cache_size (default=\"100,000\" entries (about 40MB))\n"
++#if ENABLE_S3FS_EXTRAS
+     "      - maximum number of entries in the stat cache, and this maximum is\n"
+     "        also treated as the number of symbolic link cache.\n"
+     "\n"
++#endif
+     "   stat_cache_expire (default is 900))\n"
++#if ENABLE_S3FS_EXTRAS
+     "      - specify expire time (seconds) for entries in the stat cache.\n"
+     "        This expire time indicates the time since stat cached. and this\n"
+     "        is also set to the expire time of the symbolic link cache.\n"
+     "\n"
++#endif
+     "   stat_cache_interval_expire (default is 900)\n"
++#if ENABLE_S3FS_EXTRAS
+     "      - specify expire time (seconds) for entries in the stat cache(and\n"
+     "        symbolic link cache).\n"
+     "      This expire time is based on the time from the last access time\n"
+     "      of the stat cache. This option is exclusive with stat_cache_expire,\n"
+     "      and is left for compatibility with older versions.\n"
+     "\n"
++#endif
++#if ENABLE_CACHE
+     "   disable_noobj_cache (default is enable)\n"
++
+     "      - By default s3fs memorizes when an object does not exist up until\n"
+     "        the stat cache timeout.  This caching can cause staleness for\n"
+     "        applications.  If disabled, s3fs will not memorize objects and may\n"
+     "        cause extra HeadObject requests and reduce performance.\n"
+     "\n"
++#endif
+     "   no_check_certificate\n"
++#if ENABLE_S3FS_EXTRAS
+     "      - server certificate won't be checked against the available \n"
+     "      certificate authorities.\n"
+     "\n"
++#endif
+     "   ssl_verify_hostname (default=\"2\")\n"
++#if ENABLE_S3FS_EXTRAS
+     "      - When 0, do not verify the SSL certificate against the hostname.\n"
+     "\n"
++#endif
+     "   nodnscache (disable DNS cache)\n"
++#if ENABLE_S3FS_EXTRAS
+     "      - s3fs is always using DNS cache, this option make DNS cache disable.\n"
+     "\n"
++#endif
+     "   nosscache (disable SSL session cache)\n"
++#if ENABLE_S3FS_EXTRAS
+     "      - s3fs is always using SSL session cache, this option make SSL \n"
+     "      session cache disable.\n"
+     "\n"
++#endif
+     "   multireq_max (default=\"20\")\n"
++#if ENABLE_S3FS_EXTRAS
+     "      - maximum number of parallel request for listing objects.\n"
+     "\n"
++#endif
+     "   parallel_count (default=\"5\")\n"
++#if ENABLE_S3FS_EXTRAS
+     "      - number of parallel request for uploading big objects.\n"
+     "      s3fs uploads large object (over 20MB) by multipart post request, \n"
+     "      and sends parallel requests.\n"
+@@ -233,23 +283,31 @@
+     "      at once. It is necessary to set this value depending on a CPU \n"
+     "      and a network band.\n"
+     "\n"
++#endif
+     "   multipart_size (default=\"10\")\n"
++#if ENABLE_S3FS_EXTRAS
+     "      - part size, in MB, for each multipart request.\n"
+     "      The minimum value is 5 MB and the maximum value is 5 GB.\n"
+     "\n"
++#endif
+     "   multipart_copy_size (default=\"512\")\n"
++#if ENABLE_S3FS_EXTRAS
+     "      - part size, in MB, for each multipart copy request, used for\n"
+     "      renames and mixupload.\n"
+     "      The minimum value is 5 MB and the maximum value is 5 GB.\n"
+     "      Must be at least 512 MB to copy the maximum 5 TB object size\n"
+     "      but lower values may improve performance.\n"
+     "\n"
++#endif
+     "   max_dirty_data (default=\"5120\")\n"
++#if ENABLE_S3FS_EXTRAS
+     "      - flush dirty data to S3 after a certain number of MB written.\n"
+     "      The minimum value is 50 MB. -1 value means disable.\n"
+     "      Cannot be used with nomixupload.\n"
+     "\n"
++#endif
+     "   bucket_size (default=maximum long unsigned integer value)\n"
++#if ENABLE_S3FS_EXTRAS
+     "      - The size of the bucket with which the corresponding\n"
+     "      elements of the statvfs structure will be filled. The option\n"
+     "      argument is an integer optionally followed by a\n"
+@@ -262,7 +320,9 @@
+     "      uses s3fs, the advertised bucket size can be set with this\n"
+     "      option.\n"
+     "\n"
++#endif
+     "   ensure_diskfree (default 0)\n"
++#if ENABLE_S3FS_EXTRAS
+     "      - sets MB to ensure disk free space. This option means the\n"
+     "        threshold of free space size on disk which is used for the\n"
+     "        cache file by s3fs. s3fs makes file for\n"
+@@ -270,27 +330,39 @@
+     "        space is smaller than this value, s3fs do not use disk space\n"
+     "        as possible in exchange for the performance.\n"
+     "\n"
++#endif
+     "   multipart_threshold (default=\"25\")\n"
++#if ENABLE_S3FS_EXTRAS
+     "      - threshold, in MB, to use multipart upload instead of\n"
+     "        single-part. Must be at least 5 MB.\n"
+     "\n"
++#endif
+     "   singlepart_copy_limit (default=\"512\")\n"
++#if ENABLE_S3FS_EXTRAS
+     "      - maximum size, in MB, of a single-part copy before trying \n"
+     "      multipart copy.\n"
+     "\n"
++#endif
+     "   host (default=\"https://s3.amazonaws.com\")\n"
++#if ENABLE_S3FS_EXTRAS
+     "      - Set a non-Amazon host, e.g., https://example.com.\n"
+     "\n"
++#endif
+     "   servicepath (default=\"/\")\n"
++#if ENABLE_S3FS_EXTRAS
+     "      - Set a service path when the non-Amazon host requires a prefix.\n"
+     "\n"
++#endif
+     "   url (default=\"https://s3.amazonaws.com\")\n"
++#if ENABLE_S3FS_EXTRAS
+     "      - sets the url to use to access Amazon S3. If you want to use HTTP,\n"
+     "        then you can set \"url=http://s3.amazonaws.com\".\n"
+     "        If you do not use https, please specify the URL with the url\n"
+     "        option.\n"
+     "\n"
++#endif
+     "   endpoint (default=\"us-east-1\")\n"
++#if ENABLE_S3FS_EXTRAS
+     "      - sets the endpoint to use on signature version 4\n"
+     "      If this option is not specified, s3fs uses \"us-east-1\" region as\n"
+     "      the default. If the s3fs could not connect to the region specified\n"
+@@ -300,6 +372,7 @@
+     "      can know the correct region name, because s3fs can find it in an\n"
+     "      error from the S3 server.\n"
+     "\n"
++#endif
+     "   sigv2 (default is signature version 4 falling back to version 2)\n"
+     "      - sets signing AWS requests by using only signature version 2\n"
+     "\n"
+@@ -307,6 +380,7 @@
+     "      - sets signing AWS requests by using only signature version 4\n"
+     "\n"
+     "   mp_umask (default is \"0000\")\n"
++#if ENABLE_S3FS_EXTRAS
+     "      - sets umask for the mount point directory.\n"
+     "      If allow_other option is not set, s3fs allows access to the mount\n"
+     "      point only to the owner. In the opposite case s3fs allows access\n"
+@@ -314,14 +388,20 @@
+     "      this option, you can control the permissions of the\n"
+     "      mount point by this option like umask.\n"
+     "\n"
++#endif
+     "   umask (default is \"0000\")\n"
++#if ENABLE_S3FS_EXTRAS
+     "      - sets umask for files under the mountpoint. This can allow\n"
+     "      users other than the mounting user to read and write to files\n"
+     "      that they did not create.\n"
+     "\n"
++#endif
+     "   nomultipart (disable multipart uploads)\n"
++#if ENABLE_S3FS_EXTRAS
+     "\n"
++#endif
+     "   streamupload (default is disable)\n"
++#if ENABLE_S3FS_EXTRAS
+     "      - Enable stream upload.\n"
+     "      If this option is enabled, a sequential upload will be performed\n"
+     "      in parallel with the write from the part that has been written\n"
+@@ -331,46 +411,64 @@
+     "      Note that this option is still experimental and may change in the\n"
+     "      future.\n"
+     "\n"
++#endif
+     "   max_thread_count (default is \"5\")\n"
++#if ENABLE_S3FS_EXTRAS
+     "      - Specifies the number of threads waiting for stream uploads.\n"
+     "      Note that this option and Streamm Upload are still experimental\n"
+     "      and subject to change in the future.\n"
+     "      This option will be merged with \"parallel_count\" in the future.\n"
+     "\n"
++#endif
+     "   enable_content_md5 (default is disable)\n"
++#if ENABLE_S3FS_EXTRAS
+     "      - Allow S3 server to check data integrity of uploads via the\n"
+     "      Content-MD5 header. This can add CPU overhead to transfers.\n"
+     "\n"
++#endif
+     "   enable_unsigned_payload (default is disable)\n"
++#if ENABLE_S3FS_EXTRAS
+     "      - Do not calculate Content-SHA256 for PutObject and UploadPart\n"
+     "      payloads. This can reduce CPU overhead to transfers.\n"
+     "\n"
++#endif
+     "   ecs (default is disable)\n"
++#if ENABLE_S3FS_EXTRAS
+     "      - This option instructs s3fs to query the ECS container credential\n"
+     "      metadata address instead of the instance metadata address.\n"
+     "\n"
++#endif
+     "   iam_role (default is no IAM role)\n"
++#if ENABLE_S3FS_EXTRAS
+     "      - This option requires the IAM role name or \"auto\". If you specify\n"
+     "      \"auto\", s3fs will automatically use the IAM role names that are set\n"
+     "      to an instance. If you specify this option without any argument, it\n"
+     "      is the same as that you have specified the \"auto\".\n"
+     "\n"
++#endif
+     "   imdsv1only (default is to use IMDSv2 with fallback to v1)\n"
++#if ENABLE_S3FS_EXTRAS
+     "      - AWS instance metadata service, used with IAM role authentication,\n"
+     "      supports the use of an API token. If you're using an IAM role\n"
+     "      in an environment that does not support IMDSv2, setting this flag\n"
+     "      will skip retrieval and usage of the API token when retrieving\n"
+     "      IAM credentials.\n"
+     "\n"
++#endif
+     "   ibm_iam_auth (default is not using IBM IAM authentication)\n"
++#if ENABLE_S3FS_EXTRAS
+     "      - This option instructs s3fs to use IBM IAM authentication.\n"
+     "      In this mode, the AWSAccessKey and AWSSecretKey will be used as\n"
+     "      IBM's Service-Instance-ID and APIKey, respectively.\n"
+     "\n"
++#endif
+     "   ibm_iam_endpoint (default is https://iam.cloud.ibm.com)\n"
++#if ENABLE_S3FS_EXTRAS
+     "      - sets the URL to use for IBM IAM authentication.\n"
+     "\n"
++#endif
+     "   credlib (default=\"\" which means disabled)\n"
++#if ENABLE_S3FS_EXTRAS
+     "      - Specifies the shared library that handles the credentials\n"
+     "      containing the authentication token.\n"
+     "      If this option is specified, the specified credential and token\n"
+@@ -380,41 +478,53 @@
+     "      use_session_token, ecs, ibm_iam_auth, ibm_iam_endpoint, imdsv1only\n"
+     "      and iam_role option.\n"
+     "\n"
++#endif
+     "   credlib_opts (default=\"\" which means disabled)\n"
++#if ENABLE_S3FS_EXTRAS
+     "      - Specifies the options to pass when the shared library specified\n"
+     "      in credlib is loaded and then initialized.\n"
+     "      For the string specified in this option, specify the string defined\n"
+     "      by the shared library.\n"
+     "\n"
++#endif
+     "   use_xattr (default is not handling the extended attribute)\n"
++#if ENABLE_S3FS_EXTRAS
+     "      Enable to handle the extended attribute (xattrs).\n"
+     "      If you set this option, you can use the extended attribute.\n"
+     "      For example, encfs and ecryptfs need to support the extended attribute.\n"
+     "      Notice: if s3fs handles the extended attribute, s3fs can not work to\n"
+     "      copy command with preserve=mode.\n"
+     "\n"
++#endif
+     "   noxmlns (disable registering xml name space)\n"
++#if ENABLE_S3FS_EXTRAS
+     "        disable registering xml name space for response of \n"
+     "        ListBucketResult and ListVersionsResult etc. Default name \n"
+     "        space is looked up from \"http://s3.amazonaws.com/doc/2006-03-01\".\n"
+     "        This option should not be specified now, because s3fs looks up\n"
+     "        xmlns automatically after v1.66.\n"
+     "\n"
++#endif
+     "   nomixupload (disable copy in multipart uploads)\n"
++#if ENABLE_S3FS_EXTRAS
+     "        Disable to use PUT (copy api) when multipart uploading large size objects.\n"
+     "        By default, when doing multipart upload, the range of unchanged data\n"
+     "        will use PUT (copy api) whenever possible.\n"
+     "        When nocopyapi or norenameapi is specified, use of PUT (copy api) is\n"
+     "        invalidated even if this option is not specified.\n"
+     "\n"
++#endif
+     "   nocopyapi (for other incomplete compatibility object storage)\n"
++#if ENABLE_S3FS_EXTRAS
+     "        Enable compatibility with S3-like APIs which do not support\n"
+     "        PUT (copy api).\n"
+     "        If you set this option, s3fs do not use PUT with \n"
+     "        \"x-amz-copy-source\" (copy api). Because traffic is increased\n"
+     "        2-3 times by this option, we do not recommend this.\n"
+     "\n"
++#endif
+     "   norenameapi (for other incomplete compatibility object storage)\n"
++#if ENABLE_S3FS_EXTRAS
+     "        Enable compatibility with S3-like APIs which do not support\n"
+     "        PUT (copy api).\n"
+     "        This option is a subset of nocopyapi option. The nocopyapi\n"
+@@ -423,39 +533,53 @@
+     "        only rename command (ex. mv). If this option is specified with\n"
+     "        nocopyapi, then s3fs ignores it.\n"
+     "\n"
++#endif
+     "   use_path_request_style (use legacy API calling style)\n"
++#if ENABLE_S3FS_EXTRAS
+     "        Enable compatibility with S3-like APIs which do not support\n"
+     "        the virtual-host request style, by using the older path request\n"
+     "        style.\n"
+     "\n"
++#endif
+     "   listobjectsv2 (use ListObjectsV2)\n"
++#if ENABLE_S3FS_EXTRAS
+     "        Issue ListObjectsV2 instead of ListObjects, useful on object\n"
+     "        stores without ListObjects support.\n"
+     "\n"
++#endif
+     "   noua (suppress User-Agent header)\n"
++#if ENABLE_S3FS_EXTRAS
+     "        Usually s3fs outputs of the User-Agent in \"s3fs/<version> (commit\n"
+     "        hash <hash>; <using ssl library name>)\" format.\n"
+     "        If this option is specified, s3fs suppresses the output of the\n"
+     "        User-Agent.\n"
+     "\n"
++#endif
+     "   cipher_suites\n"
++#if ENABLE_S3FS_EXTRAS
+     "        Customize the list of TLS cipher suites.\n"
+     "        Expects a colon separated list of cipher suite names.\n"
+     "        A list of available cipher suites, depending on your TLS engine,\n"
+     "        can be found on the CURL library documentation:\n"
+     "        https://curl.haxx.se/docs/ssl-ciphers.html\n"
+     "\n"
++#endif
+     "   instance_name - The instance name of the current s3fs mountpoint.\n"
++#if ENABLE_S3FS_EXTRAS
+     "        This name will be added to logging messages and user agent headers sent by s3fs.\n"
+     "\n"
++#endif
+     "   complement_stat (complement lack of file/directory mode)\n"
++#if ENABLE_S3FS_EXTRAS
+     "        s3fs complements lack of information about file/directory mode\n"
+     "        if a file or a directory object does not have x-amz-meta-mode\n"
+     "        header. As default, s3fs does not complements stat information\n"
+     "        for a object, then the object will not be able to be allowed to\n"
+     "        list/modify.\n"
+     "\n"
++#endif
+     "   compat_dir (enable support of alternative directory names)\n"
++#if ENABLE_S3FS_EXTRAS
+     "        s3fs supports two different naming schemas \"dir/\" and\n"
+     "        \"dir\" to map directory names to S3 objects and\n"
+     "        vice versa by default. As a third variant, directories can be\n"
+@@ -470,7 +594,9 @@
+     "        The support for these different naming schemas causes an increased\n"
+     "        communication effort.\n"
+     "\n"
++#endif
+     "   use_wtf8 - support arbitrary file system encoding.\n"
++#if ENABLE_S3FS_EXTRAS
+     "        S3 requires all object names to be valid UTF-8. But some\n"
+     "        clients, notably Windows NFS clients, use their own encoding.\n"
+     "        This option re-encodes invalid UTF-8 object names into valid\n"
+@@ -478,25 +604,33 @@
+     "        Unicode set.\n"
+     "        Useful on clients not using UTF-8 as their file system encoding.\n"
+     "\n"
++#endif
+     "   use_session_token - indicate that session token should be provided.\n"
++#if ENABLE_S3FS_EXTRAS
+     "        If credentials are provided by environment variables this switch\n"
+     "        forces presence check of AWSSESSIONTOKEN variable.\n"
+     "        Otherwise an error is returned.\n"
+     "\n"
++#endif
+     "   requester_pays (default is disable)\n"
++#if ENABLE_S3FS_EXTRAS
+     "        This option instructs s3fs to enable requests involving\n"
+     "        Requester Pays buckets.\n"
+     "        It includes the 'x-amz-request-payer=requester' entry in the\n"
+     "        request header.\n"
+     "\n"
++#endif
+     "   mime (default is \"/etc/mime.types\")\n"
++#if ENABLE_S3FS_EXTRAS
+     "        Specify the path of the mime.types file.\n"
+     "        If this option is not specified, the existence of \"/etc/mime.types\"\n"
+     "        is checked, and that file is loaded as mime information.\n"
+     "        If this file does not exist on macOS, then \"/etc/apache2/mime.types\"\n"
+     "        is checked as well.\n"
+     "\n"
++#endif
+     "   proxy (default=\"\")\n"
++#if ENABLE_S3FS_EXTRAS
+     "        This option specifies a proxy to S3 server.\n"
+     "        Specify the proxy with '[<scheme://]hostname(fqdn)[:<port>]' formatted.\n"
+     "        '<schema>://' can be omitted, and 'http://' is used when omitted.\n"
+@@ -507,7 +641,9 @@
+     "        This option is equivalent to and takes precedence over the environment\n"
+     "        variables 'http_proxy', 'all_proxy', etc.\n"
+     "\n"
++#endif
+     "   proxy_cred_file (default=\"\")\n"
++#if ENABLE_S3FS_EXTRAS
+     "        This option specifies the file that describes the username and\n"
+     "        passphrase for authentication of the proxy when the HTTP schema\n"
+     "        proxy is specified by the 'proxy' option.\n"
+@@ -516,7 +652,9 @@
+     "        Separate the username and passphrase with a ':' character and\n"
+     "        specify each as a URL-encoded string.\n"
+     "\n"
++#endif
+     "   logfile - specify the log output file.\n"
++#if ENABLE_S3FS_EXTRAS
+     "        s3fs outputs the log file to syslog. Alternatively, if s3fs is\n"
+     "        started with the \"-f\" option specified, the log will be output\n"
+     "        to the stdout/stderr.\n"
+@@ -525,28 +663,36 @@
+     "        file when s3fs receives a SIGHUP signal. You can use the SIGHUP\n"
+     "        signal for log rotation.\n"
+     "\n"
++#endif
+     "   dbglevel (default=\"crit\")\n"
++#if ENABLE_S3FS_EXTRAS
+     "        Set the debug message level. set value as crit (critical), err\n"
+     "        (error), warn (warning), info (information) to debug level.\n"
+     "        default debug level is critical. If s3fs run with \"-d\" option,\n"
+     "        the debug level is set information. When s3fs catch the signal\n"
+     "        SIGUSR2, the debug level is bump up.\n"
+     "\n"
++#endif
+     "   curldbg - put curl debug message\n"
++#if ENABLE_S3FS_EXTRAS
+     "        Put the debug message from libcurl when this option is specified.\n"
+     "        Specify \"normal\" or \"body\" for the parameter.\n"
+     "        If the parameter is omitted, it is the same as \"normal\".\n"
+     "        If \"body\" is specified, some API communication body data will be\n"
+     "        output in addition to the debug message output as \"normal\".\n"
+     "\n"
++#endif
+     "   no_time_stamp_msg - no time stamp in debug message\n"
++#if ENABLE_S3FS_EXTRAS
+     "        The time stamp is output to the debug message by default.\n"
+     "        If this option is specified, the time stamp will not be output\n"
+     "        in the debug message.\n"
+     "        It is the same even if the environment variable \"S3FS_MSGTIMESTAMP\"\n"
+     "        is set to \"no\".\n"
+     "\n"
++#endif
+     "   set_check_cache_sigusr1 (default is stdout)\n"
++#if ENABLE_S3FS_EXTRAS
+     "        If the cache is enabled, you can check the integrity of the\n"
+     "        cache file and the cache file's stats info file.\n"
+     "        This option is specified and when sending the SIGUSR1 signal\n"
+@@ -555,7 +701,9 @@
+     "        check result to that file. The file path parameter can be omitted.\n"
+     "        If omitted, the result will be output to stdout or syslog.\n"
+     "\n"
++#endif
+     "   update_parent_dir_stat (default is disable)\n"
++#if ENABLE_S3FS_EXTRAS
+     "        The parent directory's mtime and ctime are updated when a file or\n"
+     "        directory is created or deleted (when the parent directory's inode is\n"
+     "        updated).\n"
+@@ -572,6 +720,7 @@
+     "   There are many FUSE specific mount options that can be specified.\n"
+     "   e.g. allow_other  See the FUSE's README for the full set.\n"
+     "\n"
++#endif
+     "Utility mode Options:\n"
+     "\n"
+     " -u, --incomplete-mpu-list\n"
+diff -urN '--exclude=.*' s3fs-fuse/src/s3fs_logger.h s3fs-fuse-minimal/src/s3fs_logger.h
+--- s3fs-fuse/src/s3fs_logger.h	2023-10-01 02:09:30.014704738 +0200
++++ s3fs-fuse-minimal/src/s3fs_logger.h	2023-06-20 16:22:55.078880052 +0200
+@@ -218,6 +218,9 @@
+ // [NOTE]
+ // small trick for VA_ARGS
+ //
++
++#if ENABLE_LOGGER
++
+ #define S3FS_PRN_EXIT(fmt, ...)   S3FS_LOW_LOGPRN_EXIT(fmt, ##__VA_ARGS__, "")
+ #define S3FS_PRN_CRIT(fmt, ...)   S3FS_LOW_LOGPRN(S3fsLog::LEVEL_CRIT, fmt, ##__VA_ARGS__)
+ #define S3FS_PRN_ERR(fmt, ...)    S3FS_LOW_LOGPRN(S3fsLog::LEVEL_ERR,  fmt, ##__VA_ARGS__)
+@@ -230,6 +233,23 @@
+ #define S3FS_PRN_CURL(fmt, ...)   S3FS_LOW_CURLDBG(fmt, ##__VA_ARGS__, "")
+ #define S3FS_PRN_CACHE(fp, ...)   S3FS_LOW_CACHE(fp, ##__VA_ARGS__, "")
+ 
++#else
++
++#define S3FS_PRN_EXIT(fmt, ...)
++#define S3FS_PRN_CRIT(fmt, ...)
++#define S3FS_PRN_ERR(fmt, ...)
++#define S3FS_PRN_WARN(fmt, ...)
++#define S3FS_PRN_DBG(fmt, ...)
++#define S3FS_PRN_INFO(fmt, ...)
++#define S3FS_PRN_INFO1(fmt, ...)
++#define S3FS_PRN_INFO2(fmt, ...)
++#define S3FS_PRN_INFO3(fmt, ...)
++#define S3FS_PRN_CURL(fmt, ...)
++#define S3FS_PRN_CACHE(fp, ...)
++
++
++#endif
++
+ #endif // S3FS_LOGGER_H_
+ 
+ /*
+diff -urN '--exclude=.*' s3fs-fuse/test/integration-test-common.sh s3fs-fuse-minimal/test/integration-test-common.sh
+--- s3fs-fuse/test/integration-test-common.sh	2023-10-01 02:09:30.014704738 +0200
++++ s3fs-fuse-minimal/test/integration-test-common.sh	2023-06-15 01:19:08.631020040 +0200
+@@ -168,7 +168,7 @@
+         if [ -z "${CHAOS_HTTP_PROXY}" ] && [ -z "${CHAOS_HTTP_PROXY_OPT}" ]; then
+             S3PROXY_CACERT_FILE="/tmp/keystore.pem"
+             rm -f /tmp/keystore.jks "${S3PROXY_CACERT_FILE}"
+-            echo -e 'password\npassword\n\n\n\n\n\n\nyes' | keytool -genkey -keystore /tmp/keystore.jks -keyalg RSA -keysize 2048 -validity 365 -ext SAN=IP:127.0.0.1
++            printf 'password\npassword\n\n\n\n\n\n\ny' | keytool -genkey -keystore /tmp/keystore.jks -keyalg RSA -keysize 2048 -validity 365 -ext SAN=IP:127.0.0.1
+             echo password | keytool -exportcert -keystore /tmp/keystore.jks -rfc -file "${S3PROXY_CACERT_FILE}"
+         else
+             S3PROXY_CACERT_FILE=""
+@@ -258,6 +258,16 @@
+         local VIA_STDBUF_CMDLINE="${STDBUF_BIN} -oL -eL"
+     fi
+ 
++    # [NOTE]
++    # On macOS we may get a VERIFY error for the self-signed certificate used by s3proxy.
++    # We can specify NO_CHECK_CERT=1 to avoid this.
++    #
++    if [ -n "${NO_CHECK_CERT}" ] && [ "${NO_CHECK_CERT}" -eq 1 ]; then
++        local NO_CHECK_CERT_OPT="-o no_check_certificate"
++    else
++        local NO_CHECK_CERT_OPT=""
++    fi
++
+     # Common s3fs options:
+     #
+     # TODO: Allow all these options to be overridden with env variables
+@@ -292,6 +302,7 @@
+             ${AUTH_OPT} \
+             ${DIRECT_IO_OPT} \
+             ${S3FS_HTTP_PROXY_OPT} \
++            ${NO_CHECK_CERT_OPT} \
+             -o stat_cache_expire=1 \
+             -o stat_cache_interval_expire=1 \
+             -o dbglevel="${DBGLEVEL:=info}" \
+diff -urN '--exclude=.*' s3fs-fuse/test/test-utils.sh s3fs-fuse-minimal/test/test-utils.sh
+--- s3fs-fuse/test/test-utils.sh	2023-10-01 02:09:30.018704795 +0200
++++ s3fs-fuse-minimal/test/test-utils.sh	2023-06-15 01:19:08.643019861 +0200
+@@ -137,22 +137,6 @@
+         echo "Could not create file ${TEST_TEXT_FILE}, it does not exist"
+         exit 1
+     fi
+-
+-    # wait & check
+-    local BASE_TEXT_LENGTH; BASE_TEXT_LENGTH=$(echo "${TEXT}" | wc -c | awk '{print $1}')
+-    local TRY_COUNT=10
+-    while true; do
+-        local MK_TEXT_LENGTH
+-        MK_TEXT_LENGTH=$(wc -c "${TEST_TEXT_FILE}" | awk '{print $1}')
+-        if [ "${BASE_TEXT_LENGTH}" -eq "${MK_TEXT_LENGTH}" ]; then
+-            break
+-        fi
+-        local TRY_COUNT=$((TRY_COUNT - 1))
+-        if [ "${TRY_COUNT}" -le 0 ]; then
+-            echo "Could not create file ${TEST_TEXT_FILE}, that file size is something wrong"
+-        fi
+-        sleep 1
+-    done
+ }
+ 
+ function rm_test_file {
+@@ -295,32 +279,29 @@
+ }
+ 
+ function get_ctime() {
++    # ex: "1657504903.019784214"
+     if [ "$(uname)" = "Darwin" ]; then
+-        # ex: "1657504903.019784214"
+         stat -f "%Fc" "$1"
+     else
+-        # ex: "2022-07-24 12:45:18.621046168 +0000"
+-        stat -c "%z" "$1"
++        stat -c "%.9Z" "$1"
+     fi
+ }
+ 
+ function get_mtime() {
++    # ex: "1657504903.019784214"
+     if [ "$(uname)" = "Darwin" ]; then
+-        # ex: "1657504903.019784214"
+         stat -f "%Fm" "$1"
+     else
+-        # ex: "2022-07-24 12:45:18.621046168 +0000"
+-        stat -c "%y" "$1"
++        stat -c "%.9Y" "$1"
+     fi
+ }
+ 
+ function get_atime() {
++    # ex: "1657504903.019784214"
+     if [ "$(uname)" = "Darwin" ]; then
+-        # ex: "1657504903.019784214"
+         stat -f "%Fa" "$1"
+     else
+-        # ex: "2022-07-24 12:45:18.621046168 +0000"
+-        stat -c "%x" "$1"
++        stat -c "%0.9X" "$1"
+     fi
+ }
+ 
